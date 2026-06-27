@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type ThemeId = 'indigo' | 'emerald' | 'rose' | 'amber' | 'slate' | 'violet';
+export type ThemeId = 'indigo' | 'emerald' | 'rose' | 'amber' | 'slate' | 'violet' | 'custom';
 
 export interface DashboardTheme {
   id: ThemeId;
@@ -129,6 +129,59 @@ export const THEME_PRESETS: DashboardTheme[] = [
   }
 ];
 
-export function getTheme(id: ThemeId): DashboardTheme {
+export function adjustBrightness(hex: string, percent: number): string {
+  const cleanHex = hex.replace(/^\s*#|\s*$/g, '');
+  if (cleanHex.length !== 6) return hex;
+
+  let R = parseInt(cleanHex.substring(0, 2), 16);
+  let G = parseInt(cleanHex.substring(2, 4), 16);
+  let B = parseInt(cleanHex.substring(4, 6), 16);
+
+  R = Math.max(0, Math.min(255, Math.round(R * (1 + percent))));
+  G = Math.max(0, Math.min(255, Math.round(G * (1 + percent))));
+  B = Math.max(0, Math.min(255, Math.round(B * (1 + percent))));
+
+  const rHex = R.toString(16).padStart(2, '0');
+  const gHex = G.toString(16).padStart(2, '0');
+  const bHex = B.toString(16).padStart(2, '0');
+
+  return `#${rHex}${gHex}${bHex}`;
+}
+
+export function getTheme(id: ThemeId, customPrimaryHex?: string): DashboardTheme {
+  if (id === 'custom') {
+    const primaryHex = customPrimaryHex || '#3b82f6';
+    const hex50 = adjustBrightness(primaryHex, 0.9);
+    const hex100 = adjustBrightness(primaryHex, 0.7);
+    const hex600 = primaryHex;
+    const hex700 = adjustBrightness(primaryHex, -0.15);
+
+    const pieColors = [
+      primaryHex,
+      adjustBrightness(primaryHex, -0.2),
+      adjustBrightness(primaryHex, 0.2),
+      adjustBrightness(primaryHex, -0.4),
+      adjustBrightness(primaryHex, 0.4),
+    ];
+
+    return {
+      id: 'custom',
+      name: '自訂配色 (Custom)',
+      primary: 'bg-indigo-600', // fallback name
+      hover: 'hover:opacity-90',
+      lightBg: 'bg-indigo-50/20',
+      lightBorder: 'border-indigo-100/30',
+      textClass: 'text-indigo-600 dark:text-indigo-400',
+      badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-100',
+      accentText: 'text-indigo-600 dark:text-indigo-400',
+      chartColor: primaryHex,
+      pieColors,
+      hex50,
+      hex100,
+      hex600,
+      hex700,
+    };
+  }
+
   return THEME_PRESETS.find(t => t.id === id) || THEME_PRESETS[0];
 }

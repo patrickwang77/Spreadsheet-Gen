@@ -12,9 +12,10 @@ export function generateHtmlDashboard(
   columns: ColumnInfo[],
   cards: CardConfig[],
   slicers: Slicer[],
-  themeId: ThemeId = 'indigo'
+  themeId: ThemeId = 'indigo',
+  customPrimaryHex?: string
 ): string {
-  const theme = getTheme(themeId);
+  const theme = getTheme(themeId, customPrimaryHex);
 
   // Serialize configurations
   const rowsJson = JSON.stringify(rows);
@@ -198,6 +199,8 @@ export function generateHtmlDashboard(
     
     // Pagination for card tables
     let tablePagination = {}; // cardId -> currentPage
+    let tableSorts = {}; // cardId -> { column, direction }
+    let lastFilteredRows = []; // cache for table sorting trigger
 
     // 2. Initialize
     window.addEventListener('DOMContentLoaded', () => {
@@ -498,6 +501,10 @@ export function generateHtmlDashboard(
             </div>
             <div class="relative h-52 w-full flex items-center justify-center">
               <canvas id="chart-canvas-\${card.id}"></canvas>
+              <div id="chart-overlay-\${card.id}" class="absolute pointer-events-none flex-col items-center justify-center hidden">
+                <span id="chart-overlay-pct-\${card.id}" class="text-base font-extrabold text-slate-800 dark:text-slate-100 font-display">0%</span>
+                <span id="chart-overlay-lbl-\${card.id}" class="text-[9px] text-slate-400 dark:text-slate-500 font-semibold tracking-wide">達成率</span>
+              </div>
             </div>
           \`;
         } else if (card.type === 'table') {
@@ -537,6 +544,7 @@ export function generateHtmlDashboard(
 
     // 6. Update Cards Content Dynamically based on Filtered Data
     function updateDashboardCards(filteredRows) {
+      lastFilteredRows = filteredRows;
       cards.forEach(card => {
         if (card.type === 'metric') {
           renderMetricCard(card, filteredRows);
@@ -598,62 +606,181 @@ export function generateHtmlDashboard(
       const canvas = document.getElementById(canvasId);
       if (!canvas) return;
 
-      // Detect dark mode status
-      const isDark = document.documentElement.classList.contains('dark');
-      const textColor = isDark ? '#94a3b8' : '#475569';
-      const gridColor = isDark ? '#334155' : '#e2e8f0';
+      try {
+        // Detect dark mode status
+        const isDark = document.documentElement.classList.contains('dark');
+        const textColor = isDark ? '#94a3b8' : '#475569';
+        const gridColor = isDark ? '#334155' : '#e2e8f0';
 
-      // Group & Aggregate Data for Chart
-      const xCol = config.xAxisColumn;
-      const yCol = config.yAxisColumn;
-      const method = config.aggregate;
+        const xCol = config.xAxisColumn;
+        const yCol = config.yAxisColumn;
+        const yCol2 = config.yAxisColumn2 || yCol;
+        const method = config.aggregate;
 
-      let labels = [];
-      let dataPoints = [];
+        let labels = [];
+        let dataPoints = [];
+        let planDataPoints = []; // Used for overlaid-bar
 
-      if (method === 'RAW') {
-        const sliced = filteredRows.slice(0, 100);
-        labels = sliced.map((r, i) => String(r[xCol] || \`Row \${i + 1}\`));
-        dataPoints = sliced.map(r => isNaN(Number(r[yCol])) ? 0 : Number(r[yCol]));
-      } else {
-        const groups = {};
-        filteredRows.forEach(row => {
-          const xVal = String(row[xCol] ?? 'Blank');
-          const yVal = isNaN(Number(row[yCol])) ? 0 : Number(row[yCol]);
-          if (!groups[xVal]) groups[xVal] = [];
-          groups[xVal].push(yVal);
-        });
+        let isDonutProgress = false;
+        let donutProgressPercent = 0;
 
-        // Calculate aggregate
-        Object.keys(groups).forEach(key => {
-          labels.push(key);
-          const list = groups[key];
-          if (method === 'SUM') {
-            dataPoints.push(list.reduce((a, b) => a + b, 0));
-          } else if (method === 'AVG') {
-            dataPoints.push(list.reduce((a, b) => a + b, 0) / list.length);
+        if (config.type === 'donut' && config.yAxisColumn2) {
+          isDonutProgress = true;
+          const actualValues = filteredRows.map(r => Number(r[yCol])).filter(v => !isNaN(v));
+          const planValues = filteredRows.map(r => Number(r[yCol2])).filter(v => !isNaN(v));
+          
+          let actualSum = 0;
+          let planSum = 0;
+          
+          if (method === 'AVG') {
+            actualSum = actualValues.length > 0 ? actualValues.reduce((a, b) => a + b, 0) / actualValues.length : 0;
+            planSum = planValues.length > 0 ? planValues.reduce((a, b) => a + b, 0) / planValues.length : 0;
+          } else {
+            actualSum = actualValues.reduce((a, b) => a + b, 0);
+            planSum = planValues.reduce((a, b) => a + b, 0);
           }
-        });
-      }
+          
+          donutProgressPercent = planSum > 0 ? Math.round((actualSum / planSum) * 100) : 0;
+          
+          labels = [\`實際值: \${yCol}\`, '剩餘目標'];
+          dataPoints = [actualSum, Math.max(0, planSum - actualSum)];
+        } else if (config.type === 'overlaid-bar') {
+          // Perform dual-aggregations for overlaid comparison
+          if (method === 'RAW') {
+            const sliced = filteredRows.slice(0, 100);
+            labels = sliced.map((r, i) => String(r[xCol] || \`Row \${i + 1}\`));
+            dataPoints = sliced.map(r => isNaN(Number(r[yCol])) ? 0 : Number(r[yCol]));
+            planDataPoints = sliced.map(r => isNaN(Number(r[yCol2])) ? 0 : Number(r[yCol2]));
+          } else {
+            const groups1 = {};
+            const groups2 = {};
+            filteredRows.forEach(row => {
+              const xVal = String(row[xCol] ?? 'Blank');
+              const yVal1 = isNaN(Number(row[yCol])) ? 0 : Number(row[yCol]);
+              const yVal2 = isNaN(Number(row[yCol2])) ? 0 : Number(row[yCol2]);
+              
+              if (!groups1[xVal]) groups1[xVal] = [];
+              if (!groups2[xVal]) groups2[xVal] = [];
+              groups1[xVal].push(yVal1);
+              groups2[xVal].push(yVal2);
+            });
 
-      // Destroy old chart if exists
-      if (chartInstances[card.id]) {
-        chartInstances[card.id].destroy();
-      }
+            Object.keys(groups1).forEach(key => {
+              labels.push(key);
+              const list1 = groups1[key];
+              const list2 = groups2[key];
+              if (method === 'SUM') {
+                dataPoints.push(list1.reduce((a, b) => a + b, 0));
+                planDataPoints.push(list2.reduce((a, b) => a + b, 0));
+              } else if (method === 'AVG') {
+                dataPoints.push(list1.reduce((a, b) => a + b, 0) / list1.length);
+                planDataPoints.push(list2.reduce((a, b) => a + b, 0) / list2.length);
+              } else if (method === 'MIN') {
+                dataPoints.push(Math.min(...list1));
+                planDataPoints.push(Math.min(...list2));
+              } else if (method === 'MAX') {
+                dataPoints.push(Math.max(...list1));
+                planDataPoints.push(Math.max(...list2));
+              } else {
+                // COUNT
+                dataPoints.push(list1.length);
+                planDataPoints.push(list2.length);
+              }
+            });
+          }
+        } else {
+          // Standard single-metric aggregation
+          if (method === 'RAW') {
+            const sliced = filteredRows.slice(0, 100);
+            labels = sliced.map((r, i) => String(r[xCol] || \`Row \${i + 1}\`));
+            dataPoints = sliced.map(r => isNaN(Number(r[yCol])) ? 0 : Number(r[yCol]));
+          } else {
+            const groups = {};
+            filteredRows.forEach(row => {
+              const xVal = String(row[xCol] ?? 'Blank');
+              const yVal = isNaN(Number(row[yCol])) ? 0 : Number(row[yCol]);
+              if (!groups[xVal]) groups[xVal] = [];
+              groups[xVal].push(yVal);
+            });
 
-      // Premium styling colors
-      const bgColors = ${JSON.stringify(theme.pieColors)};
-      const borderColors = bgColors;
+            Object.keys(groups).forEach(key => {
+              labels.push(key);
+              const list = groups[key];
+              if (method === 'SUM') {
+                dataPoints.push(list.reduce((a, b) => a + b, 0));
+              } else if (method === 'AVG') {
+                dataPoints.push(list.reduce((a, b) => a + b, 0) / list.length);
+              }
+            });
+          }
+        }
 
-      // Configure Chart Type
-      let chartType = config.type;
-      if (chartType === 'area') chartType = 'line'; // Chart.js handles Area via Line with fill:true
+        // Destroy old chart if exists
+        if (chartInstances[card.id]) {
+          chartInstances[card.id].destroy();
+        }
 
-      const chartConfig = {
-        type: chartType,
-        data: {
-          labels: labels,
-          datasets: [{
+        const bgColors = ${JSON.stringify(theme.pieColors)};
+        const borderColors = bgColors;
+
+        let chartType = config.type;
+        let datasets = [];
+        let extraOptions = {};
+
+        if (config.type === 'overlaid-bar') {
+          chartType = 'bar';
+          datasets = [
+            {
+              label: \`計劃值: \${yCol2} (\${method})\`,
+              data: planDataPoints,
+              backgroundColor: '${theme.hex100}',
+              borderColor: '${theme.chartColor}',
+              borderWidth: 1.5,
+              barPercentage: 0.8,
+              categoryPercentage: 0.8,
+              grouped: false,
+              order: 2,
+            },
+            {
+              label: \`實際值: \${yCol} (\${method})\`,
+              data: dataPoints,
+              backgroundColor: '${theme.chartColor}',
+              borderColor: '${theme.chartColor}',
+              borderWidth: 1.5,
+              barPercentage: 0.45,
+              categoryPercentage: 0.8,
+              grouped: false,
+              order: 1,
+            }
+          ];
+        } else if (config.type === 'donut') {
+          chartType = 'doughnut';
+          let customBg = bgColors;
+          let customBorder = borderColors;
+          
+          if (isDonutProgress) {
+            customBg = ['${theme.chartColor}', isDark ? '#1e293b' : '#f1f5f9'];
+            customBorder = ['${theme.chartColor}', isDark ? '#334155' : '#e2e8f0'];
+          }
+
+          datasets = [{
+            label: \`\${yCol} (\${method})\`,
+            data: dataPoints,
+            backgroundColor: customBg,
+            borderColor: customBorder,
+            borderWidth: 1.5,
+          }];
+          
+          if (config.donutRange === 'half') {
+            extraOptions = {
+              circumference: 180,
+              rotation: -90,
+            };
+          }
+        } else {
+          // Standard charts
+          if (chartType === 'area') chartType = 'line';
+          datasets = [{
             label: \`\${yCol} (\${method})\`,
             data: dataPoints,
             backgroundColor: config.type === 'pie' ? bgColors : bgColors[0],
@@ -663,38 +790,94 @@ export function generateHtmlDashboard(
             tension: 0.35,
             pointRadius: 4,
             pointHoverRadius: 6,
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              display: config.type === 'pie',
-              position: 'bottom',
-              labels: {
-                boxWidth: 12,
-                color: textColor,
-                font: { size: 10 }
+          }];
+        }
+
+        const isPieOrDonut = config.type === 'pie' || config.type === 'donut';
+
+        const chartConfig = {
+          type: chartType,
+          data: {
+            labels: labels,
+            datasets: datasets
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            ...extraOptions,
+            plugins: {
+              legend: {
+                display: isPieOrDonut || config.type === 'overlaid-bar',
+                position: 'bottom',
+                labels: {
+                  boxWidth: 12,
+                  color: textColor,
+                  font: { size: 10 }
+                }
+              },
+              tooltip: {
+                callbacks: {
+                  label: function(context) {
+                    let label = context.dataset.label || '';
+                    if (label) {
+                      label += ': ';
+                    }
+                    if (context.parsed.y !== undefined) {
+                      label += context.parsed.y.toLocaleString();
+                    } else if (context.parsed !== undefined) {
+                      label += context.parsed.toLocaleString();
+                    }
+                    return label;
+                  }
+                }
+              }
+            },
+            scales: isPieOrDonut ? {} : {
+              y: {
+                beginAtZero: true,
+                grid: { color: gridColor },
+                ticks: {
+                  color: textColor,
+                  font: { size: 10, family: 'Inter' },
+                  callback: function(value) {
+                    return value.toLocaleString();
+                  }
+                }
+              },
+              x: {
+                grid: { display: false },
+                ticks: { color: textColor, font: { size: 10, family: 'Inter' } }
               }
             }
-          },
-          scales: config.type === 'pie' ? {} : {
-            y: {
-              beginAtZero: true,
-              grid: { color: gridColor },
-              ticks: { color: textColor, font: { size: 10, family: 'Inter' } }
-            },
-            x: {
-              grid: { display: false },
-              ticks: { color: textColor, font: { size: 10, family: 'Inter' } }
+          }
+        };
+
+        // Create new instance
+        chartInstances[card.id] = new Chart(canvas, chartConfig);
+
+        // Handle overlay for donut progress
+        const overlayEl = document.getElementById(\`chart-overlay-\${card.id}\`);
+        if (overlayEl) {
+          if (isDonutProgress) {
+            overlayEl.classList.remove('hidden');
+            overlayEl.classList.add('flex');
+            
+            // Adjust position for half-donut vs full-donut
+            if (config.donutRange === 'half') {
+              overlayEl.className = "absolute pointer-events-none flex flex-col items-center justify-center bottom-8";
+            } else {
+              overlayEl.className = "absolute pointer-events-none flex flex-col items-center justify-center inset-0";
             }
+            
+            document.getElementById(\`chart-overlay-pct-\${card.id}\`).innerText = donutProgressPercent + '%';
+          } else {
+            overlayEl.classList.remove('flex');
+            overlayEl.classList.add('hidden');
           }
         }
-      };
-
-      // Create new instance
-      chartInstances[card.id] = new Chart(canvas, chartConfig);
+      } catch (err) {
+        console.error("Error rendering chart for card " + card.id + ":", err);
+      }
     }
 
     // C. Render single Table Card (with client-side pagination)
@@ -706,7 +889,33 @@ export function generateHtmlDashboard(
       const displayCols = config.columns.length > 0 ? config.columns : Object.keys(filteredRows[0] || {});
       const pageSize = config.pageSize || 10;
       
-      const totalRows = filteredRows.length;
+      // Sort Rows if sorted
+      let sortedRows = [...filteredRows];
+      const sortConfig = tableSorts[cardId];
+      if (sortConfig) {
+        const { column, direction } = sortConfig;
+        sortedRows.sort((a, b) => {
+          const valA = a[column];
+          const valB = b[column];
+          
+          const numA = Number(valA);
+          const numB = Number(valB);
+          const isNumA = !isNaN(numA) && valA !== null && valA !== '';
+          const isNumB = !isNaN(numB) && valB !== null && valB !== '';
+          
+          if (isNumA && isNumB) {
+            return direction === 'asc' ? numA - numB : numB - numA;
+          }
+          
+          const strA = valA !== undefined && valA !== null ? String(valA) : '';
+          const strB = valB !== undefined && valB !== null ? String(valB) : '';
+          return direction === 'asc'
+            ? strA.localeCompare(strB, 'zh-TW', { numeric: true })
+            : strB.localeCompare(strA, 'zh-TW', { numeric: true });
+        });
+      }
+
+      const totalRows = sortedRows.length;
       const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
       
       // Keep current page within boundaries
@@ -720,13 +929,32 @@ export function generateHtmlDashboard(
       const currPage = tablePagination[cardId];
       const startIdx = currPage * pageSize;
       const endIdx = Math.min(startIdx + pageSize, totalRows);
-      const slicedRows = filteredRows.slice(startIdx, endIdx);
+      const slicedRows = sortedRows.slice(startIdx, endIdx);
 
       // Render Headers
       const thTr = document.getElementById(\`th-\${cardId}\`);
-      thTr.innerHTML = displayCols.map(col => \`
-        <th class="px-2 py-1 text-slate-700 dark:text-slate-300 font-bold border-b border-slate-100 dark:border-slate-800 text-left shrink-0 truncate max-w-[150px]" title="\${col}">\${col}</th>
-      \`).join('');
+      thTr.innerHTML = displayCols.map(col => {
+        let sortIcon = '';
+        if (sortConfig && sortConfig.column === col) {
+          if (sortConfig.direction === 'asc') {
+            sortIcon = '<i data-lucide="arrow-up" class="w-3.5 h-3.5 ml-1 inline-block shrink-0 text-slate-700 dark:text-slate-300"></i>';
+          } else {
+            sortIcon = '<i data-lucide="arrow-down" class="w-3.5 h-3.5 ml-1 inline-block shrink-0 text-slate-700 dark:text-slate-300"></i>';
+          }
+        } else {
+          sortIcon = '<i data-lucide="arrow-up-down" class="w-2.5 h-2.5 ml-1 inline-block text-slate-300 dark:text-slate-600 opacity-0 group-hover:opacity-100 shrink-0"></i>';
+        }
+        return \`
+          <th class="px-2 py-1.5 text-slate-700 dark:text-slate-300 font-bold border-b border-slate-100 dark:border-slate-800 text-left shrink-0 truncate max-w-[150px] cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 select-none group" 
+              title="\${col} - 點擊以排序"
+              onclick="handleTableSort('\${cardId}', '\${col}')">
+            <div class="flex items-center gap-0.5 truncate">
+              <span class="truncate">\${col}</span>
+              \${sortIcon}
+            </div>
+          </th>
+        \`;
+      }).join('');
 
       // Render Rows
       const tb = document.getElementById(\`tb-\${cardId}\`);
@@ -746,8 +974,9 @@ export function generateHtmlDashboard(
             const rawVal = row[col];
             const strVal = rawVal !== undefined && rawVal !== null ? String(rawVal) : '';
             const isNum = !isNaN(Number(rawVal)) && strVal !== '';
-            const alignClass = isNum ? 'text-right' : 'text-left';
-            return \`<td class="px-2 py-1 border-b border-slate-100 dark:border-slate-800 truncate max-w-[150px] \${alignClass}" title="\${strVal}">\${strVal}</td>\`;
+            const alignClass = isNum ? 'text-right font-mono' : 'text-left';
+            const displayVal = isNum ? Number(rawVal).toLocaleString(undefined, { maximumFractionDigits: 2 }) : strVal;
+            return \`<td class="px-2 py-1 border-b border-slate-100 dark:border-slate-800 truncate max-w-[150px] \${alignClass}" title="\${displayVal}">\${displayVal}</td>\`;
           }).join('');
           
           const tr = document.createElement('tr');
@@ -784,6 +1013,26 @@ export function generateHtmlDashboard(
         renderTableCard(card, filteredRows);
       };
     }
+
+    // Sort Click handler
+    window.handleTableSort = function(cardId, col) {
+      const currentSort = tableSorts[cardId];
+      if (!currentSort || currentSort.column !== col) {
+        tableSorts[cardId] = { column: col, direction: 'asc' };
+      } else if (currentSort.direction === 'asc') {
+        tableSorts[cardId] = { column: col, direction: 'desc' };
+      } else {
+        delete tableSorts[cardId];
+      }
+      
+      tablePagination[cardId] = 0;
+      
+      const card = cards.find(c => c.id === cardId);
+      if (card) {
+        renderTableCard(card, lastFilteredRows);
+      }
+      lucide.createIcons();
+    };
 
     // Theme and Appearance Mode Support
     function setThemeMode(mode) {

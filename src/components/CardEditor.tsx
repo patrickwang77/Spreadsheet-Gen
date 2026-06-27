@@ -29,6 +29,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
   const [chartType, setChartType] = useState<ChartType>('bar');
   const [chartXCol, setChartXCol] = useState('');
   const [chartYCol, setChartYCol] = useState('');
+  const [chartYCol2, setChartYCol2] = useState(''); // Plan column for overlaid bar
+  const [donutRange, setDonutRange] = useState<'full' | 'half'>('full'); // Circle range for donut
   const [chartAgg, setChartAgg] = useState<'SUM' | 'AVG' | 'RAW'>('SUM');
 
   // Table settings
@@ -51,6 +53,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
         setChartType(editingCard.chart.type);
         setChartXCol(editingCard.chart.xAxisColumn);
         setChartYCol(editingCard.chart.yAxisColumn);
+        setChartYCol2(editingCard.chart.yAxisColumn2 || '');
+        setDonutRange(editingCard.chart.donutRange || 'full');
         setChartAgg(editingCard.chart.aggregate);
       } else if (editingCard.type === 'table' && editingCard.table) {
         setTableCols(editingCard.table.columns);
@@ -73,6 +77,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
       setChartType('bar');
       setChartXCol(firstStrCol);
       setChartYCol(firstNumCol);
+      setChartYCol2(firstNumCol);
+      setDonutRange('full');
       setChartAgg('SUM');
 
       setTableCols(columns.slice(0, 5).map((c) => c.name));
@@ -111,6 +117,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
         type: chartType,
         xAxisColumn: chartXCol || columns[0]?.name || '',
         yAxisColumn: chartYCol || columns.find((c) => c.isNumeric)?.name || columns[0]?.name || '',
+        yAxisColumn2: (chartType === 'overlaid-bar' || chartType === 'donut') ? (chartYCol2 || chartYCol) : undefined,
+        donutRange: chartType === 'donut' ? donutRange : undefined,
         aggregate: chartAgg,
       };
     } else if (type === 'table') {
@@ -276,6 +284,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
                     <option value="line">折線圖 (Line)</option>
                     <option value="area">面積圖 (Area)</option>
                     <option value="pie">圓餅圖 (Pie)</option>
+                    <option value="donut">圓環圖 (Donut)</option>
+                    <option value="overlaid-bar">實際與計劃重疊圖 (Overlaid Bar)</option>
                   </select>
                 </div>
 
@@ -310,7 +320,9 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-400 mb-1">Y 軸 (數值度量)</label>
+                  <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                    Y 軸 {(chartType === 'overlaid-bar' || chartType === 'donut') ? '(實際值 - Actual)' : '(數值度量)'}
+                  </label>
                   <select
                     value={chartYCol}
                     onChange={(e) => setChartYCol(e.target.value)}
@@ -324,6 +336,46 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
                   </select>
                 </div>
               </div>
+
+              {(chartType === 'overlaid-bar' || chartType === 'donut') && (
+                <div className="bg-slate-900/40 p-2 border border-slate-800 rounded-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[10px] font-semibold text-slate-400">Y 軸 2 (計畫值 - Plan / 比較對象)</label>
+                    <span className="text-[9px] text-emerald-400 font-bold bg-emerald-500/10 px-1 py-0.2 rounded">支援進度比較</span>
+                  </div>
+                  <select
+                    value={chartYCol2}
+                    onChange={(e) => setChartYCol2(e.target.value)}
+                    className="w-full text-xs px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-white"
+                  >
+                    {numericCols.map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-[9px] text-slate-500 mt-1 block">
+                    {chartType === 'overlaid-bar' 
+                      ? '重疊圖將用於比較 Actual（前端窄柱）與 Plan（後端寬柱）之完成度。' 
+                      : '圓環圖將用於比較實際值（彩色進度環）與計劃值（背景底圈）之整體目標完成百分比（進度條儀表板模式）。'}
+                  </span>
+                </div>
+              )}
+
+              {chartType === 'donut' && (
+                <div className="bg-slate-900/40 p-2 border border-slate-800 rounded-lg">
+                  <label className="block text-[10px] font-semibold text-slate-400 mb-1">圓環範圍範疇</label>
+                  <select
+                    value={donutRange}
+                    onChange={(e) => setDonutRange(e.target.value as any)}
+                    className="w-full text-xs px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-white"
+                  >
+                    <option value="full">360° 完整全圓環 (Full Donut)</option>
+                    <option value="half">180° 頂部拱形半圓環 (Half Donut)</option>
+                  </select>
+                  <span className="text-[9px] text-slate-500 mt-1 block">半圓環適合展示像是儀表板、目標完成百分比等半圓儀錶效果。</span>
+                </div>
+              )}
             </div>
           )}
 

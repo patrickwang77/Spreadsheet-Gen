@@ -66,16 +66,47 @@ export default function App() {
   const [isCalcsOpen, setIsCalcsOpen] = useState(false);
   const [isSlicersOpen, setIsSlicersOpen] = useState(false);
 
-  // 7. Theme state
+  // 7. Theme state & Custom color picking
   const [currentThemeId, setCurrentThemeId] = useState<ThemeId>('indigo');
-  const currentTheme = useMemo(() => getTheme(currentThemeId), [currentThemeId]);
+  const [customPrimaryHex, setCustomPrimaryHex] = useState<string>(() => {
+    return localStorage.getItem('dashboard-custom-primary-hex') || '#4f46e5';
+  });
+  const currentTheme = useMemo(() => getTheme(currentThemeId, customPrimaryHex), [currentThemeId, customPrimaryHex]);
 
-  // 8. Dark/Light/System Theme Mode State
+  // 8. User custom API key state
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem('dashboard-gemini-api-key') || '';
+  });
+  const [showApiKey, setShowApiKey] = useState(false);
+
+  // 9. Persistent Saved Layouts state
+  interface SavedLayout {
+    id: string;
+    name: string;
+    cards: CardConfig[];
+    slicers: Slicer[];
+    calculatedColumns: CalculatedColumn[];
+    themeId: ThemeId;
+    customPrimaryHex?: string;
+    createdAt: string;
+  }
+  const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>(() => {
+    try {
+      const stored = localStorage.getItem('dashboard-saved-layouts');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [newLayoutName, setNewLayoutName] = useState('');
+
+  // 10. Dark/Light/System Theme Mode State
   const [colorMode, setColorMode] = useState<'light' | 'dark' | 'system'>(() => {
     return (localStorage.getItem('dashboard-color-mode') as 'light' | 'dark' | 'system') || 'light';
   });
 
-  // 9. AI Layout Optimization State
+  // 11. AI Layout Optimization State
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizationError, setOptimizationError] = useState<string | null>(null);
 
@@ -125,11 +156,17 @@ export default function App() {
       // Keep sample size compact and representative
       const sampleData = originalRows.slice(0, 40);
 
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      if (geminiApiKey.trim() !== '') {
+        headers['x-gemini-api-key'] = geminiApiKey.trim();
+      }
+
       const res = await fetch('/api/gemini/optimize-layout', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           columns,
           sampleData,
@@ -473,6 +510,47 @@ export default function App() {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // LAYOUT SAVE / LOAD / DELETE PERSISTENCE
+  // ---------------------------------------------------------------------------
+  const handleSaveCurrentLayout = () => {
+    if (!newLayoutName.trim()) return;
+    const newLayout: SavedLayout = {
+      id: 'layout-' + Date.now(),
+      name: newLayoutName.trim(),
+      cards: activeCards,
+      slicers: slicers,
+      calculatedColumns: calculatedColumns,
+      themeId: currentThemeId,
+      customPrimaryHex: customPrimaryHex,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [...savedLayouts, newLayout];
+    setSavedLayouts(updated);
+    localStorage.setItem('dashboard-saved-layouts', JSON.stringify(updated));
+    setNewLayoutName('');
+    setShowSaveModal(false);
+  };
+
+  const handleLoadLayout = (layout: SavedLayout) => {
+    setCustomCards(layout.cards);
+    setSlicers(layout.slicers);
+    setCalculatedColumns(layout.calculatedColumns);
+    setCurrentThemeId(layout.themeId);
+    if (layout.customPrimaryHex) {
+      setCustomPrimaryHex(layout.customPrimaryHex);
+      localStorage.setItem('dashboard-custom-primary-hex', layout.customPrimaryHex);
+    }
+    setCurrentTemplateId('preset-custom');
+  };
+
+  const handleDeleteLayout = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = savedLayouts.filter(l => l.id !== id);
+    setSavedLayouts(updated);
+    localStorage.setItem('dashboard-saved-layouts', JSON.stringify(updated));
+  };
+
   const handleDownloadHtml = () => {
     if (!fileName) return;
 
@@ -482,7 +560,8 @@ export default function App() {
       columns,
       activeCards,
       slicers,
-      currentThemeId
+      currentThemeId,
+      customPrimaryHex
     );
 
     const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
@@ -525,6 +604,38 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end flex-wrap sm:flex-nowrap">
+            {/* Custom Color Picker for Custom Theme */}
+            {currentThemeId === 'custom' && (
+              <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1.5 transition-all duration-200">
+                <input
+                  type="color"
+                  value={customPrimaryHex}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCustomPrimaryHex(val);
+                    localStorage.setItem('dashboard-custom-primary-hex', val);
+                  }}
+                  className="w-4 h-4 rounded-full cursor-pointer border border-slate-300 dark:border-slate-600 outline-none p-0 bg-transparent"
+                  title="選擇自訂主題的主色調"
+                />
+                <input
+                  type="text"
+                  value={customPrimaryHex}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
+                      setCustomPrimaryHex(val);
+                      if (val.length === 7) {
+                        localStorage.setItem('dashboard-custom-primary-hex', val);
+                      }
+                    }
+                  }}
+                  className="w-14 bg-transparent border-0 text-[10px] font-mono text-slate-700 dark:text-slate-200 focus:ring-0 focus:outline-none p-0 text-center uppercase"
+                  placeholder="#HEX"
+                />
+              </div>
+            )}
+
             {/* Theme Selector UI */}
             <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 transition-colors duration-200">
               <Palette className={`w-3.5 h-3.5 ${currentTheme.accentText} transition-colors duration-200`} />
@@ -539,6 +650,9 @@ export default function App() {
                     {t.name}
                   </option>
                 ))}
+                <option value="custom" className="bg-white dark:bg-slate-800 text-slate-800 dark:text-white font-semibold text-indigo-600">
+                  ✨ 自訂配色 (Custom Color)
+                </option>
               </select>
             </div>
 
@@ -561,6 +675,39 @@ export default function App() {
                 <option value="dark" className="bg-white dark:bg-slate-800 text-slate-800 dark:text-white">深色模式 (Dark)</option>
                 <option value="system" className="bg-white dark:bg-slate-800 text-slate-800 dark:text-white">系統同步 (System)</option>
               </select>
+            </div>
+
+            {/* User Custom API Key Config */}
+            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 transition-colors duration-200">
+              <span className="text-[10px] text-slate-400 dark:text-slate-400 font-bold">🔑 金鑰：</span>
+              {showApiKey ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="password"
+                    value={geminiApiKey}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setGeminiApiKey(val);
+                      localStorage.setItem('dashboard-gemini-api-key', val);
+                    }}
+                    placeholder="貼上您的 Gemini API Key"
+                    className="w-28 bg-transparent border-0 text-[10px] text-slate-700 dark:text-slate-200 focus:ring-0 outline-none p-0 text-left font-mono"
+                  />
+                  <button
+                    onClick={() => setShowApiKey(false)}
+                    className="text-[9px] bg-emerald-500 hover:bg-emerald-600 text-white px-1.5 py-0.5 rounded font-bold cursor-pointer transition-colors"
+                  >
+                    儲存
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowApiKey(true)}
+                  className="text-[10px] text-slate-600 dark:text-slate-300 font-bold hover:underline select-none cursor-pointer"
+                >
+                  {geminiApiKey ? '✅ 已啟用 API 金鑰' : '❌ 未設定 (點此設定)'}
+                </button>
+              )}
             </div>
 
             {fileName && (
@@ -726,6 +873,64 @@ export default function App() {
                     );
                   })}
                 </div>
+
+                {/* Custom layout saving and loading control center */}
+                <div className="mt-3.5 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider">
+                      我的自訂版面：
+                    </span>
+                    {savedLayouts.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <select
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val) {
+                              const layout = savedLayouts.find(l => l.id === val);
+                              if (layout) handleLoadLayout(layout);
+                            }
+                            e.target.value = ''; // reset selection
+                          }}
+                          className="text-[11px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-200 font-bold px-2 py-1 cursor-pointer outline-none"
+                          defaultValue=""
+                        >
+                          <option value="" disabled>📂 選擇並載入已儲存佈局 ({savedLayouts.length})</option>
+                          {savedLayouts.map((l) => (
+                            <option key={l.id} value={l.id}>
+                              {l.name} ({new Date(l.createdAt).toLocaleDateString()})
+                            </option>
+                          ))}
+                        </select>
+                        
+                        {/* Quick delete selected layout button list */}
+                        <div className="flex flex-wrap items-center gap-1">
+                          {savedLayouts.map(l => (
+                            <button
+                              key={`del-${l.id}`}
+                              onClick={(e) => handleDeleteLayout(l.id, e)}
+                              className="text-[9px] px-1.5 py-0.5 border border-rose-100 dark:border-rose-950/40 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded cursor-pointer transition-all"
+                              title={`刪除 "${l.name}"`}
+                            >
+                              ✕ {l.name.slice(0, 8)}{l.name.length > 8 ? '..' : ''}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 italic">目前無已儲存的自訂佈局。</span>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setNewLayoutName('');
+                      setShowSaveModal(true);
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-all cursor-pointer shadow-sm`}
+                  >
+                    💾 儲存目前版面配置到瀏覽器
+                  </button>
+                </div>
               </div>
 
               {/* Collapsible: Calculated Columns Builder */}
@@ -889,6 +1094,50 @@ export default function App() {
       <footer className="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-4 text-center text-[10px] text-slate-400 dark:text-slate-500 mt-auto transition-colors duration-200">
         資料表互動式儀表板產生器 • 支援 XLS, XLSX, CSV • 設計並下載 100% 離線可用看板
       </footer>
+
+      {/* Save Layout Dialog Modal */}
+      {showSaveModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 w-full max-w-sm shadow-xl space-y-4 transition-colors duration-200">
+            <div>
+              <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 font-display">
+                <span>💾 儲存自訂版面佈局</span>
+              </h3>
+              <p className="text-[10px] text-slate-400 mt-1">
+                這會將您目前的卡片組合、運算欄位、篩選器啟用狀態及主題配色儲存至瀏覽器 localStorage。
+              </p>
+            </div>
+            <div>
+              <label className="block text-[9px] font-bold text-slate-400 mb-1.5 uppercase tracking-wider">版面佈局名稱</label>
+              <input
+                type="text"
+                value={newLayoutName}
+                onChange={(e) => setNewLayoutName(e.target.value)}
+                placeholder="例如: 產品銷量對比看板"
+                className="w-full text-xs px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-800 dark:text-slate-100"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2 justify-end text-[11px] font-bold pt-2">
+              <button
+                onClick={() => {
+                  setShowSaveModal(false);
+                  setNewLayoutName('');
+                }}
+                className="px-3 py-1.5 bg-slate-150 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveCurrentLayout}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg cursor-pointer shadow-sm"
+              >
+                確認儲存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

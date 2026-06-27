@@ -23,7 +23,7 @@ import {
 } from 'recharts';
 import { CardConfig, RowData } from '../types';
 import { calculateMetric, aggregateChartData } from '../utils';
-import { Calculator, BarChart3, Table, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
+import { Calculator, BarChart3, Table, ChevronLeft, ChevronRight, GripVertical, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { ThemeId, getTheme } from '../themes';
 
 interface DashboardCardsProps {
@@ -33,6 +33,8 @@ interface DashboardCardsProps {
   onDeleteCard?: (cardId: string) => void;
   isCustomMode: boolean;
   themeId?: ThemeId;
+  customPrimaryHex?: string;
+  colorMode?: 'light' | 'dark' | 'system';
   onReorderCards?: (reorderedCards: CardConfig[]) => void;
 }
 
@@ -43,16 +45,21 @@ export default function DashboardCards({
   onDeleteCard,
   isCustomMode,
   themeId = 'indigo',
+  customPrimaryHex,
+  colorMode = 'light',
   onReorderCards,
 }: DashboardCardsProps) {
   // Store table pagination per card id
   const [tablePages, setTablePages] = useState<{ [cardId: string]: number }>({});
 
+  // Store table sorting per card id
+  const [tableSorts, setTableSorts] = useState<{ [cardId: string]: { column: string; direction: 'asc' | 'desc' } }>({});
+
   // Drag and drop states
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dragOverCardId, setDragOverCardId] = useState<string | null>(null);
 
-  const theme = getTheme(themeId);
+  const theme = getTheme(themeId, customPrimaryHex);
   const COLORS = theme.pieColors;
 
   const handleDragStart = (e: React.DragEvent, cardId: string) => {
@@ -205,14 +212,56 @@ export default function DashboardCards({
 
             {/* Chart Card */}
             {card.type === 'chart' && card.chart && (() => {
-              const { type: chartType, xAxisColumn, yAxisColumn, aggregate } = card.chart;
-              const chartData = aggregateChartData(filteredRows, xAxisColumn, yAxisColumn, aggregate);
-              const isDark = document.documentElement.classList.contains('dark');
-              const gridStroke = isDark ? '#1e293b' : '#f1f5f9';
-              const axisStroke = isDark ? '#475569' : '#94a3b8';
+              const { type: chartType, xAxisColumn, yAxisColumn, yAxisColumn2, donutRange, aggregate } = card.chart;
+              
+              // Resolve datasets
+              const chartData1 = aggregateChartData(filteredRows, xAxisColumn, yAxisColumn, aggregate);
+              
+              let chartData: any[] = [];
+              let isDonutProgress = false;
+              let donutProgressPercent = 0;
+              let actualSum = 0;
+              let planSum = 0;
+
+              if (chartType === 'donut' && yAxisColumn2) {
+                isDonutProgress = true;
+                const actualValues = filteredRows.map(r => Number(r[yAxisColumn])).filter(v => !isNaN(v));
+                const planValues = filteredRows.map(r => Number(r[yAxisColumn2])).filter(v => !isNaN(v));
+                
+                if (aggregate === 'AVG') {
+                  actualSum = actualValues.length > 0 ? actualValues.reduce((a, b) => a + b, 0) / actualValues.length : 0;
+                  planSum = planValues.length > 0 ? planValues.reduce((a, b) => a + b, 0) / planValues.length : 0;
+                } else {
+                  actualSum = actualValues.reduce((a, b) => a + b, 0);
+                  planSum = planValues.reduce((a, b) => a + b, 0);
+                }
+                
+                donutProgressPercent = planSum > 0 ? Math.round((actualSum / planSum) * 100) : 0;
+                
+                chartData = [
+                  { name: `實際值: ${yAxisColumn}`, value: actualSum },
+                  { name: `剩餘目標`, value: Math.max(0, planSum - actualSum) }
+                ];
+              } else if (chartType === 'overlaid-bar' && yAxisColumn2) {
+                const chartData2 = aggregateChartData(filteredRows, xAxisColumn, yAxisColumn2, aggregate);
+                chartData = chartData1.map(p1 => {
+                  const p2 = chartData2.find(p => p.name === p1.name);
+                  return {
+                    name: p1.name,
+                    actual: p1.value,
+                    plan: p2 ? p2.value : 0,
+                  };
+                });
+              } else {
+                chartData = chartData1;
+              }
+
+              const isDark = colorMode === 'dark' || (colorMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
+              const gridStroke = isDark ? '#334155' : '#e2e8f0';
+              const axisStroke = isDark ? '#94a3b8' : '#64748b';
               const tooltipStyle = isDark 
-                ? { fontSize: 10, borderRadius: 6, backgroundColor: '#0f172a', border: '1px solid #334155', padding: '4px 8px', color: '#f1f5f9' }
-                : { fontSize: 10, borderRadius: 6, backgroundColor: '#ffffff', border: '1px solid #e2e8f0', padding: '4px 8px', color: '#0f172a' };
+                ? { fontSize: 10, borderRadius: 12, backgroundColor: '#1e293b', border: '1px solid #475569', padding: '6px 10px', color: '#f8fafc' }
+                : { fontSize: 10, borderRadius: 12, backgroundColor: '#ffffff', border: '1px solid #e2e8f0', padding: '6px 10px', color: '#0f172a' };
 
               return (
                 <div className="flex flex-col h-full">
@@ -233,32 +282,92 @@ export default function DashboardCards({
                   <div className="h-52 w-full flex items-center justify-center text-[11px] text-slate-500 dark:text-slate-400">
                     {chartData.length === 0 ? (
                       <span className="italic">無可用的圖表資料。</span>
+                    ) : chartType === 'donut' ? (
+                      <div className="relative w-full h-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={chartData}
+                              cx="50%"
+                              cy={donutRange === 'half' ? '80%' : '50%'}
+                              startAngle={donutRange === 'half' ? 180 : 90}
+                              endAngle={donutRange === 'half' ? 0 : -270}
+                              innerRadius={donutRange === 'half' ? 60 : 45}
+                              outerRadius={donutRange === 'half' ? 90 : 70}
+                              paddingAngle={isDonutProgress ? 0 : (donutRange === 'half' ? 1 : 2)}
+                              dataKey="value"
+                            >
+                              {chartData.map((entry, index) => {
+                                let cellColor = COLORS[index % COLORS.length];
+                                if (isDonutProgress) {
+                                  cellColor = index === 0 ? theme.chartColor : (isDark ? '#1e293b' : '#f1f5f9');
+                                }
+                                return (
+                                  <Cell 
+                                    key={`cell-${index}`} 
+                                    fill={cellColor} 
+                                    stroke={isDonutProgress ? (index === 0 ? theme.chartColor : (isDark ? '#334155' : '#e2e8f0')) : undefined} 
+                                    strokeWidth={isDonutProgress ? 1 : 0} 
+                                  />
+                                );
+                              })}
+                            </Pie>
+                            <Tooltip contentStyle={tooltipStyle} formatter={(value) => Number(value).toLocaleString()} />
+                            <Legend layout="horizontal" verticalAlign="bottom" align="center" iconSize={6} wrapperStyle={{ fontSize: 9, paddingTop: 4 }} />
+                          </PieChart>
+                        </ResponsiveContainer>
+
+                        {/* Donut progress center text display */}
+                        {isDonutProgress && (
+                          <div className={`absolute pointer-events-none flex flex-col items-center justify-center left-1/2 -translate-x-1/2 ${
+                            donutRange === 'half' ? 'bottom-8' : 'top-[42%] -translate-y-1/2'
+                          }`}>
+                            <span className="text-base font-extrabold text-slate-800 dark:text-slate-100 font-display">
+                              {donutProgressPercent}%
+                            </span>
+                            <span className="text-[9px] text-slate-400 dark:text-slate-500 font-semibold tracking-wide">
+                              達成率
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <ResponsiveContainer width="100%" height="100%">
                         {chartType === 'bar' ? (
                           <BarChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
                             <XAxis dataKey="name" stroke={axisStroke} fontSize={9} tickLine={false} />
-                            <YAxis stroke={axisStroke} fontSize={9} tickLine={false} />
-                            <Tooltip contentStyle={tooltipStyle} />
+                            <YAxis stroke={axisStroke} fontSize={9} tickLine={false} tickFormatter={(val) => Number(val).toLocaleString()} />
+                            <Tooltip contentStyle={tooltipStyle} formatter={(val) => Number(val).toLocaleString()} />
                             <Bar dataKey="value" fill={theme.chartColor} radius={[3, 3, 0, 0]} name={`${yAxisColumn} (${aggregate})`} />
                           </BarChart>
                         ) : chartType === 'line' ? (
                           <LineChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
                             <XAxis dataKey="name" stroke={axisStroke} fontSize={9} tickLine={false} />
-                            <YAxis stroke={axisStroke} fontSize={9} tickLine={false} />
-                            <Tooltip contentStyle={tooltipStyle} />
+                            <YAxis stroke={axisStroke} fontSize={9} tickLine={false} tickFormatter={(val) => Number(val).toLocaleString()} />
+                            <Tooltip contentStyle={tooltipStyle} formatter={(val) => Number(val).toLocaleString()} />
                             <Line type="monotone" dataKey="value" stroke={theme.chartColor} strokeWidth={1.5} dot={{ r: 2 }} activeDot={{ r: 4 }} name={`${yAxisColumn} (${aggregate})`} />
                           </LineChart>
                         ) : chartType === 'area' ? (
                           <AreaChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
                             <XAxis dataKey="name" stroke={axisStroke} fontSize={9} tickLine={false} />
-                            <YAxis stroke={axisStroke} fontSize={9} tickLine={false} />
-                            <Tooltip contentStyle={tooltipStyle} />
+                            <YAxis stroke={axisStroke} fontSize={9} tickLine={false} tickFormatter={(val) => Number(val).toLocaleString()} />
+                            <Tooltip contentStyle={tooltipStyle} formatter={(val) => Number(val).toLocaleString()} />
                             <Area type="monotone" dataKey="value" fill={theme.hex50} stroke={theme.chartColor} strokeWidth={1.5} name={`${yAxisColumn} (${aggregate})`} />
                           </AreaChart>
+                        ) : chartType === 'overlaid-bar' ? (
+                          <BarChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                            <XAxis dataKey="name" xAxisId="plan" stroke={axisStroke} fontSize={9} tickLine={false} />
+                            <XAxis dataKey="name" xAxisId="actual" stroke={axisStroke} fontSize={9} tickLine={false} hide />
+                            <YAxis stroke={axisStroke} fontSize={9} tickLine={false} tickFormatter={(val) => Number(val).toLocaleString()} />
+                            <Tooltip contentStyle={tooltipStyle} formatter={(val) => Number(val).toLocaleString()} />
+                            <Legend verticalAlign="top" height={22} iconSize={8} wrapperStyle={{ fontSize: 9 }} />
+                            <Bar xAxisId="plan" dataKey="plan" fill={theme.hex100} stroke={theme.chartColor} strokeWidth={1} barSize={26} radius={[3, 3, 0, 0]} name={`計劃值: ${yAxisColumn2}`} />
+                            <Bar xAxisId="actual" dataKey="actual" fill={theme.chartColor} barSize={16} radius={[2, 2, 0, 0]} name={`實際值: ${yAxisColumn}`} />
+                          </BarChart>
                         ) : (
                           // Pie Chart
                           <PieChart>
@@ -266,16 +375,16 @@ export default function DashboardCards({
                               data={chartData}
                               cx="50%"
                               cy="50%"
-                              innerRadius={40}
+                              innerRadius={0}
                               outerRadius={65}
-                              paddingAngle={2}
+                              paddingAngle={0}
                               dataKey="value"
                             >
                               {chartData.map((entry, index) => (
                                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                               ))}
                             </Pie>
-                            <Tooltip contentStyle={{ fontSize: 10, borderRadius: 6, padding: '4px 8px' }} />
+                            <Tooltip contentStyle={tooltipStyle} formatter={(val) => Number(val).toLocaleString()} />
                             <Legend layout="horizontal" verticalAlign="bottom" align="center" iconSize={6} wrapperStyle={{ fontSize: 9, paddingTop: 4 }} />
                           </PieChart>
                         )}
@@ -291,12 +400,39 @@ export default function DashboardCards({
               const config = card.table;
               const displayColumns = config.columns.length > 0 ? config.columns : Object.keys(filteredRows[0] || {});
               const pageSize = config.pageSize || 8;
-              const totalRows = filteredRows.length;
+
+              // Apply sort
+              let sortedRows = [...filteredRows];
+              const sortConfig = tableSorts[card.id];
+              if (sortConfig) {
+                const { column, direction } = sortConfig;
+                sortedRows.sort((a, b) => {
+                  const valA = a[column];
+                  const valB = b[column];
+                  
+                  const numA = Number(valA);
+                  const numB = Number(valB);
+                  const isNumA = !isNaN(numA) && valA !== null && valA !== '';
+                  const isNumB = !isNaN(numB) && valB !== null && valB !== '';
+                  
+                  if (isNumA && isNumB) {
+                    return direction === 'asc' ? numA - numB : numB - numA;
+                  }
+                  
+                  const strA = valA !== undefined && valA !== null ? String(valA) : '';
+                  const strB = valB !== undefined && valB !== null ? String(valB) : '';
+                  return direction === 'asc' 
+                    ? strA.localeCompare(strB, 'zh-TW', { numeric: true }) 
+                    : strB.localeCompare(strA, 'zh-TW', { numeric: true });
+                });
+              }
+
+              const totalRows = sortedRows.length;
               const totalPages = Math.ceil(totalRows / pageSize) || 1;
 
               const currentPage = tablePages[card.id] || 0;
               const startIdx = currentPage * pageSize;
-              const slicedRows = filteredRows.slice(startIdx, startIdx + pageSize);
+              const slicedRows = sortedRows.slice(startIdx, startIdx + pageSize);
 
               const handlePrevPage = () => {
                 if (currentPage > 0) {
@@ -308,6 +444,27 @@ export default function DashboardCards({
                 if (currentPage < totalPages - 1) {
                   setTablePages({ ...tablePages, [card.id]: currentPage + 1 });
                 }
+              };
+
+              const handleSort = (colName: string) => {
+                const currentSort = tableSorts[card.id];
+                if (!currentSort || currentSort.column !== colName) {
+                  setTableSorts({
+                    ...tableSorts,
+                    [card.id]: { column: colName, direction: 'asc' }
+                  });
+                } else if (currentSort.direction === 'asc') {
+                  setTableSorts({
+                    ...tableSorts,
+                    [card.id]: { column: colName, direction: 'desc' }
+                  });
+                } else {
+                  const updatedSorts = { ...tableSorts };
+                  delete updatedSorts[card.id];
+                  setTableSorts(updatedSorts);
+                }
+                // Reset page to 0
+                setTablePages({ ...tablePages, [card.id]: 0 });
               };
 
               return (
@@ -336,11 +493,31 @@ export default function DashboardCards({
                       <table className="w-full text-left border-collapse text-[11px]">
                         <thead>
                           <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-medium">
-                            {displayColumns.map((col) => (
-                              <th key={col} className="px-2 py-1.5 text-slate-600 dark:text-slate-300 font-bold truncate max-w-[150px]" title={col}>
-                                {col}
-                              </th>
-                            ))}
+                            {displayColumns.map((col) => {
+                              const isSorted = sortConfig?.column === col;
+                              const isAsc = sortConfig?.direction === 'asc';
+                              return (
+                                <th 
+                                  key={col} 
+                                  onClick={() => handleSort(col)}
+                                  className="px-2 py-1.5 text-slate-600 dark:text-slate-300 font-bold truncate max-w-[150px] cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 select-none group" 
+                                  title={`${col} - 點擊以排序`}
+                                >
+                                  <div className="flex items-center gap-0.5 truncate">
+                                    <span className="truncate">{col}</span>
+                                    {isSorted ? (
+                                      isAsc ? (
+                                        <ArrowUp className="w-3 h-3 ml-0.5 text-slate-600 dark:text-slate-300 shrink-0" />
+                                      ) : (
+                                        <ArrowDown className="w-3 h-3 ml-0.5 text-slate-600 dark:text-slate-300 shrink-0" />
+                                      )
+                                    ) : (
+                                      <ArrowUpDown className="w-2.5 h-2.5 ml-0.5 text-slate-300 dark:text-slate-600 opacity-0 group-hover:opacity-100 shrink-0 transition-opacity" />
+                                    )}
+                                  </div>
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
                         <tbody className="text-slate-600 dark:text-slate-300 divide-y divide-slate-100 dark:divide-slate-800">
@@ -357,13 +534,16 @@ export default function DashboardCards({
                                   const val = row[col];
                                   const strVal = val !== undefined && val !== null ? String(val) : '';
                                   const isNum = !isNaN(Number(val)) && strVal !== '';
+                                  const displayVal = isNum 
+                                    ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 }) 
+                                    : strVal;
                                   return (
                                     <td
                                       key={col}
                                       className={`px-2 py-1 truncate max-w-[150px] ${isNum ? 'text-right font-mono text-[10px]' : 'text-left'}`}
-                                      title={strVal}
+                                      title={displayVal}
                                     >
-                                      {strVal}
+                                      {displayVal}
                                     </td>
                                   );
                                 })}

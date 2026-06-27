@@ -50,7 +50,36 @@ export default function UploadZone({ onDataLoaded }: UploadZoneProps) {
           throw new Error('工作表中沒有可讀取的資料。');
         }
 
-        onDataLoaded(file.name, rawRows);
+        // Helper to format date strictly to YYYY-MM-DD
+        const formatDate = (date: Date): string => {
+          if (isNaN(date.getTime())) return '';
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        };
+
+        const isLongDateString = (val: string): boolean => {
+          return val.includes('00:00:00') || /^[A-Za-z]{3} [A-Za-z]{3} \d{2} \d{4}/.test(val);
+        };
+
+        // Clean dates to prevent showing time components
+        const cleanRows = rawRows.map((row) => {
+          const cleanRow: RowData = {};
+          Object.keys(row).forEach((key) => {
+            const val = row[key];
+            if (val instanceof Date) {
+              cleanRow[key] = formatDate(val);
+            } else if (typeof val === 'string' && isLongDateString(val) && !isNaN(Date.parse(val))) {
+              cleanRow[key] = formatDate(new Date(val));
+            } else {
+              cleanRow[key] = val;
+            }
+          });
+          return cleanRow;
+        });
+
+        onDataLoaded(file.name, cleanRows);
       } catch (err: any) {
         console.error('Error parsing file:', err);
         setError(`檔案解析失敗: ${err.message || '格式不正確'}`);

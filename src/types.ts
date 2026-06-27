@@ -17,7 +17,7 @@ export interface RowData {
 }
 
 export type OperationType = 'SUM' | 'AVG' | 'COUNT' | 'MIN' | 'MAX' | 'MEDIAN';
-export type ChartType = 'bar' | 'line' | 'pie' | 'area' | 'scatter';
+export type ChartType = 'bar' | 'line' | 'pie' | 'area' | 'scatter' | 'overlaid-bar' | 'donut';
 
 export interface MetricConfig {
   column: string;
@@ -30,6 +30,8 @@ export interface ChartConfig {
   type: ChartType;
   xAxisColumn: string;
   yAxisColumn: string;
+  yAxisColumn2?: string; // Used as the comparison / Plan column in overlaid-bar charts
+  donutRange?: 'full' | 'half'; // Selected range for donut charts: full circle or half circle
   aggregate: 'SUM' | 'AVG' | 'RAW';
 }
 

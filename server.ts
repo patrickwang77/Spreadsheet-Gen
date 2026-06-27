@@ -31,6 +31,21 @@ app.post("/api/gemini/optimize-layout", async (req, res) => {
       return res.status(400).json({ error: "Missing or invalid columns data" });
     }
 
+    // Use custom API Key if provided in the header, otherwise fallback to server's env key
+    const userApiKey = req.headers['x-gemini-api-key'];
+    let localAi = ai;
+    
+    if (userApiKey && typeof userApiKey === 'string' && userApiKey.trim() !== '') {
+      localAi = new GoogleGenAI({
+        apiKey: userApiKey.trim(),
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+    }
+
     const systemPrompt = `You are an expert data analyst and UI/UX dashboard architect.
 Analyze the provided columns and sample data of a spreadsheet. Recommend a highly optimized, cohesive, and beautiful dashboard card layout combination.
 You can create cards of three types:
@@ -40,9 +55,11 @@ You can create cards of three types:
    - prefix?: string (concise currency/unit symbol or prefix, e.g., '$' or '¥', only if applicable, else empty)
    - suffix?: string (concise unit or suffix, e.g., '元', '人', '次', '件', or '%', only if applicable, else empty)
 2. 'chart': to display visual distributions or trends. Config fields:
-   - type: 'bar' | 'line' | 'pie' | 'area' | 'scatter'
+   - type: 'bar' | 'line' | 'pie' | 'area' | 'scatter' | 'overlaid-bar' | 'donut'
    - xAxisColumn: string (typically categorical or date column)
    - yAxisColumn: string (numeric column)
+   - yAxisColumn2?: string (comparison plan column, only if type is 'overlaid-bar')
+   - donutRange?: 'full' | 'half' (only if type is 'donut')
    - aggregate: 'SUM' | 'AVG' | 'RAW'
 3. 'table': to show a subset of raw detailed records. Config fields:
    - columns: string[] (names of columns to show)
@@ -67,7 +84,7 @@ And here is a sample of the raw data records (first few rows): ${JSON.stringify(
 
 Provide your recommended layout in the exact schema specified. Keep the language of all titles in Traditional Chinese (繁體中文). Do not explain anything, just output the JSON array inside a standard JSON response.`;
 
-    const response = await ai.models.generateContent({
+    const response = await localAi.models.generateContent({
       model: "gemini-3.5-flash",
       contents: [userPrompt],
       config: {
@@ -95,9 +112,11 @@ Provide your recommended layout in the exact schema specified. Keep the language
               chart: {
                 type: Type.OBJECT,
                 properties: {
-                  type: { type: Type.STRING, enum: ["bar", "line", "pie", "area", "scatter"] },
+                  type: { type: Type.STRING, enum: ["bar", "line", "pie", "area", "scatter", "overlaid-bar", "donut"] },
                   xAxisColumn: { type: Type.STRING },
                   yAxisColumn: { type: Type.STRING },
+                  yAxisColumn2: { type: Type.STRING },
+                  donutRange: { type: Type.STRING, enum: ["full", "half"] },
                   aggregate: { type: Type.STRING, enum: ["SUM", "AVG", "RAW"] }
                 },
                 required: ["type", "xAxisColumn", "yAxisColumn", "aggregate"]
