@@ -524,6 +524,9 @@ export function generateHtmlDashboard(
                 <tbody id="tb-\${card.id}" class="text-slate-600 dark:text-slate-300 divide-y divide-slate-100 dark:divide-slate-800">
                   <!-- Row data -->
                 </tbody>
+                <tfoot id="tf-\${card.id}">
+                  <!-- Subtotal data -->
+                </tfoot>
               </table>
             </div>
             <!-- Pagination -->
@@ -886,11 +889,48 @@ export function generateHtmlDashboard(
       if (!config) return;
 
       const cardId = card.id;
-      const displayCols = config.columns.length > 0 ? config.columns : Object.keys(filteredRows[0] || {});
+      const isGrouped = !!config.groupByColumn;
+
+      const displayCols = isGrouped
+        ? [config.groupByColumn, ...(config.subtotalColumns && config.subtotalColumns.length > 0
+            ? config.subtotalColumns
+            : Object.keys(filteredRows[0] || {}).filter(k => k !== config.groupByColumn && !isNaN(Number(filteredRows[0]?.[k] || ''))))]
+        : (config.columns.length > 0 ? config.columns : Object.keys(filteredRows[0] || {}));
+
       const pageSize = config.pageSize || 10;
+
+      // Group and aggregate if groupByColumn is set
+      let baseRows = [];
+      if (isGrouped && config.groupByColumn) {
+        const groupCol = config.groupByColumn;
+        const groups = {};
+
+        filteredRows.forEach(row => {
+          const keyVal = row[groupCol] !== undefined && row[groupCol] !== null ? String(row[groupCol]) : '(空白)';
+          if (!groups[keyVal]) {
+            groups[keyVal] = {
+              [groupCol]: keyVal
+            };
+            displayCols.slice(1).forEach(col => {
+              groups[keyVal][col] = 0;
+            });
+          }
+
+          displayCols.slice(1).forEach(col => {
+            const v = Number(row[col]);
+            if (!isNaN(v)) {
+              groups[keyVal][col] = (groups[keyVal][col] || 0) + v;
+            }
+          });
+        });
+
+        baseRows = Object.values(groups);
+      } else {
+        baseRows = [...filteredRows];
+      }
       
       // Sort Rows if sorted
-      let sortedRows = [...filteredRows];
+      let sortedRows = [...baseRows];
       const sortConfig = tableSorts[cardId];
       if (sortConfig) {
         const { column, direction } = sortConfig;
@@ -984,6 +1024,49 @@ export function generateHtmlDashboard(
           tr.innerHTML = rowHtml;
           tb.appendChild(tr);
         });
+      }
+
+      // Render Subtotal if configured
+      const tf = document.getElementById(\`tf-\${cardId}\`);
+      if (tf) {
+        const hasFooter = (isGrouped && displayCols.length > 1) || (!isGrouped && config.subtotalColumns && config.subtotalColumns.length > 0);
+        if (hasFooter) {
+          tf.className = "bg-slate-50 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200";
+          tf.innerHTML = \`
+            <tr>
+              \\\${displayCols.map((col, idx) => {
+                const isFirst = idx === 0;
+                const isSumCol = isGrouped ? idx > 0 : (config.subtotalColumns && config.subtotalColumns.includes(col));
+                
+                if (isFirst) {
+                  const labelText = isGrouped ? '總計 (Total)' : '小計 (Subtotal)';
+                  return \\\`
+                    <td class="px-2 py-1.5 text-left text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                      \\\${labelText}
+                    </td>
+                  \\\`;
+                }
+                
+                if (isSumCol) {
+                  const sumVal = filteredRows.reduce((sum, r) => {
+                    const v = Number(r[col]);
+                    return sum + (isNaN(v) ? 0 : v);
+                  }, 0);
+                  return \\\`
+                    <td class="px-2 py-1.5 text-right font-mono text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                      \\\${sumVal.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </td>
+                  \\\`;
+                }
+                
+                return \\\`<td class="px-2 py-1.5"></td>\\\`;
+              }).join('')}
+            </tr>
+          \`;
+        } else {
+          tf.innerHTML = '';
+          tf.className = '';
+        }
       }
 
       // Update Pagination UI

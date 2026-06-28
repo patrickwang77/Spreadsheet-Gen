@@ -38,6 +38,8 @@ export interface ChartConfig {
 export interface TableConfig {
   columns: string[];
   pageSize: number;
+  subtotalColumns?: string[];
+  groupByColumn?: string;
 }
 
 export interface CardConfig {

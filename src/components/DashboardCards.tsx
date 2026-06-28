@@ -360,13 +360,13 @@ export default function DashboardCards({
                         ) : chartType === 'overlaid-bar' ? (
                           <BarChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-                            <XAxis dataKey="name" xAxisId="plan" stroke={axisStroke} fontSize={9} tickLine={false} />
-                            <XAxis dataKey="name" xAxisId="actual" stroke={axisStroke} fontSize={9} tickLine={false} hide />
+                            <XAxis dataKey="name" stroke={axisStroke} fontSize={9} tickLine={false} />
+                            <XAxis dataKey="name" xAxisId="actual-axis" stroke={axisStroke} fontSize={9} tickLine={false} hide />
                             <YAxis stroke={axisStroke} fontSize={9} tickLine={false} tickFormatter={(val) => Number(val).toLocaleString()} />
                             <Tooltip contentStyle={tooltipStyle} formatter={(val) => Number(val).toLocaleString()} />
                             <Legend verticalAlign="top" height={22} iconSize={8} wrapperStyle={{ fontSize: 9 }} />
-                            <Bar xAxisId="plan" dataKey="plan" fill={theme.hex100} stroke={theme.chartColor} strokeWidth={1} barSize={26} radius={[3, 3, 0, 0]} name={`計劃值: ${yAxisColumn2}`} />
-                            <Bar xAxisId="actual" dataKey="actual" fill={theme.chartColor} barSize={16} radius={[2, 2, 0, 0]} name={`實際值: ${yAxisColumn}`} />
+                            <Bar dataKey="plan" fill={theme.hex100} stroke={theme.chartColor} strokeWidth={1} barSize={26} radius={[3, 3, 0, 0]} name={`計劃值: ${yAxisColumn2}`} />
+                            <Bar xAxisId="actual-axis" dataKey="actual" fill={theme.chartColor} barSize={16} radius={[2, 2, 0, 0]} name={`實際值: ${yAxisColumn}`} />
                           </BarChart>
                         ) : (
                           // Pie Chart
@@ -398,31 +398,68 @@ export default function DashboardCards({
             {/* Table Card */}
             {card.type === 'table' && card.table && (() => {
               const config = card.table;
-              const displayColumns = config.columns.length > 0 ? config.columns : Object.keys(filteredRows[0] || {});
+              const isGrouped = !!config.groupByColumn;
+
+              const displayColumns = isGrouped
+                ? [config.groupByColumn!, ...(config.subtotalColumns && config.subtotalColumns.length > 0
+                    ? config.subtotalColumns
+                    : Object.keys(filteredRows[0] || {}).filter(k => k !== config.groupByColumn && !isNaN(Number(filteredRows[0]?.[k] || ''))))]
+                : (config.columns.length > 0 ? config.columns : Object.keys(filteredRows[0] || {}));
+
               const pageSize = config.pageSize || 8;
 
+              // Group and aggregate if groupByColumn is set
+              let baseRows: any[] = [];
+              if (isGrouped && config.groupByColumn) {
+                const groupCol = config.groupByColumn;
+                const groups: { [key: string]: any } = {};
+
+                filteredRows.forEach(row => {
+                  const keyVal = row[groupCol] !== undefined && row[groupCol] !== null ? String(row[groupCol]) : '(空白)';
+                  if (!groups[keyVal]) {
+                    groups[keyVal] = {
+                      [groupCol]: keyVal
+                    };
+                    displayColumns.slice(1).forEach(col => {
+                      groups[keyVal][col] = 0;
+                    });
+                  }
+
+                  displayColumns.slice(1).forEach(col => {
+                    const v = Number(row[col]);
+                    if (!isNaN(v)) {
+                      groups[keyVal][col] = (groups[keyVal][col] as number) + v;
+                    }
+                  });
+                });
+
+                baseRows = Object.values(groups);
+              } else {
+                baseRows = [...filteredRows];
+              }
+
               // Apply sort
-              let sortedRows = [...filteredRows];
+              let sortedRows = [...baseRows];
               const sortConfig = tableSorts[card.id];
               if (sortConfig) {
                 const { column, direction } = sortConfig;
                 sortedRows.sort((a, b) => {
                   const valA = a[column];
                   const valB = b[column];
-                  
+
                   const numA = Number(valA);
                   const numB = Number(valB);
                   const isNumA = !isNaN(numA) && valA !== null && valA !== '';
                   const isNumB = !isNaN(numB) && valB !== null && valB !== '';
-                  
+
                   if (isNumA && isNumB) {
                     return direction === 'asc' ? numA - numB : numB - numA;
                   }
-                  
+
                   const strA = valA !== undefined && valA !== null ? String(valA) : '';
                   const strB = valB !== undefined && valB !== null ? String(valB) : '';
-                  return direction === 'asc' 
-                    ? strA.localeCompare(strB, 'zh-TW', { numeric: true }) 
+                  return direction === 'asc'
+                    ? strA.localeCompare(strB, 'zh-TW', { numeric: true })
                     : strB.localeCompare(strA, 'zh-TW', { numeric: true });
                 });
               }
@@ -476,7 +513,7 @@ export default function DashboardCards({
                           <GripVertical className="w-3.5 h-3.5 text-slate-400 shrink-0 cursor-grab active:cursor-grabbing" />
                         )}
                         <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate" title={card.title}>
-                          {card.title}
+                          {card.title} {isGrouped && <span className="text-[10px] text-emerald-500 font-normal">(分組彙總表)</span>}
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -497,10 +534,10 @@ export default function DashboardCards({
                               const isSorted = sortConfig?.column === col;
                               const isAsc = sortConfig?.direction === 'asc';
                               return (
-                                <th 
-                                  key={col} 
+                                <th
+                                  key={col}
                                   onClick={() => handleSort(col)}
-                                  className="px-2 py-1.5 text-slate-600 dark:text-slate-300 font-bold truncate max-w-[150px] cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 select-none group" 
+                                  className="px-2 py-1.5 text-slate-600 dark:text-slate-300 font-bold truncate max-w-[150px] cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 select-none group"
                                   title={`${col} - 點擊以排序`}
                                 >
                                   <div className="flex items-center gap-0.5 truncate">
@@ -534,8 +571,8 @@ export default function DashboardCards({
                                   const val = row[col];
                                   const strVal = val !== undefined && val !== null ? String(val) : '';
                                   const isNum = !isNaN(Number(val)) && strVal !== '';
-                                  const displayVal = isNum 
-                                    ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 }) 
+                                  const displayVal = isNum
+                                    ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 })
                                     : strVal;
                                   return (
                                     <td
@@ -551,6 +588,38 @@ export default function DashboardCards({
                             ))
                           )}
                         </tbody>
+                        {((isGrouped && displayColumns.length > 1) || (!isGrouped && config.subtotalColumns && config.subtotalColumns.length > 0)) && (
+                          <tfoot className="bg-slate-50 dark:bg-slate-800/80 border-t-2 border-slate-200 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-200">
+                            <tr>
+                              {displayColumns.map((col, idx) => {
+                                const isFirst = idx === 0;
+                                const isSumCol = isGrouped ? idx > 0 : config.subtotalColumns?.includes(col);
+
+                                if (isFirst) {
+                                  return (
+                                    <td key={col} className="px-2 py-1.5 text-left text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                                      {isGrouped ? '總計 (Total)' : '小計 (Subtotal)'}
+                                    </td>
+                                  );
+                                }
+
+                                if (isSumCol) {
+                                  const sumVal = filteredRows.reduce((sum, r) => {
+                                    const v = Number(r[col]);
+                                    return sum + (isNaN(v) ? 0 : v);
+                                  }, 0);
+                                  return (
+                                    <td key={col} className="px-2 py-1.5 text-right font-mono text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                                      {sumVal.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                    </td>
+                                  );
+                                }
+
+                                return <td key={col} className="px-2 py-1.5"></td>;
+                              })}
+                            </tr>
+                          </tfoot>
+                        )}
                       </table>
                     </div>
                   </div>

@@ -36,6 +36,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
   // Table settings
   const [tableCols, setTableCols] = useState<string[]>([]);
   const [tablePageSize, setTablePageSize] = useState<number>(8);
+  const [tableSubtotalCols, setTableSubtotalCols] = useState<string[]>([]);
+  const [tableGroupByCol, setTableGroupByCol] = useState<string>('');
 
   // Load editing card data if present
   useEffect(() => {
@@ -59,6 +61,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
       } else if (editingCard.type === 'table' && editingCard.table) {
         setTableCols(editingCard.table.columns);
         setTablePageSize(editingCard.table.pageSize);
+        setTableSubtotalCols(editingCard.table.subtotalColumns || []);
+        setTableGroupByCol(editingCard.table.groupByColumn || '');
       }
     } else {
       // Set defaults in create mode
@@ -83,6 +87,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
 
       setTableCols(columns.slice(0, 5).map((c) => c.name));
       setTablePageSize(8);
+      setTableSubtotalCols([]);
+      setTableGroupByCol('');
     }
   }, [editingCard, columns]);
 
@@ -125,6 +131,8 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
       card.table = {
         columns: tableCols,
         pageSize: tablePageSize,
+        subtotalColumns: tableSubtotalCols,
+        groupByColumn: tableGroupByCol || undefined,
       };
     }
 
@@ -136,6 +144,14 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
       setTableCols(tableCols.filter((c) => c !== colName));
     } else {
       setTableCols([...tableCols, colName]);
+    }
+  };
+
+  const toggleTableSubtotalColumn = (colName: string) => {
+    if (tableSubtotalCols.includes(colName)) {
+      setTableSubtotalCols(tableSubtotalCols.filter((c) => c !== colName));
+    } else {
+      setTableSubtotalCols([...tableSubtotalCols, colName]);
     }
   };
 
@@ -386,37 +402,84 @@ export default function CardEditor({ columns, editingCard, onSave, onCancel }: C
                 表格顯示設定
               </div>
 
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-400 mb-1">每頁顯示筆數</label>
-                <select
-                  value={tablePageSize}
-                  onChange={(e) => setTablePageSize(Number(e.target.value))}
-                  className="w-24 text-xs px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-white"
-                >
-                  <option value={5}>5 筆</option>
-                  <option value={8}>8 筆</option>
-                  <option value={10}>10 筆</option>
-                  <option value={15}>15 筆</option>
-                  <option value={20}>20 筆</option>
-                </select>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 mb-1">每頁顯示筆數</label>
+                  <select
+                    value={tablePageSize}
+                    onChange={(e) => setTablePageSize(Number(e.target.value))}
+                    className="w-full text-xs px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-white"
+                  >
+                    <option value={5}>5 筆</option>
+                    <option value={8}>8 筆</option>
+                    <option value={10}>10 筆</option>
+                    <option value={15}>15 筆</option>
+                    <option value={20}>20 筆</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 mb-1">群組/小計維度欄位 (選用)</label>
+                  <select
+                    value={tableGroupByCol}
+                    onChange={(e) => setTableGroupByCol(e.target.value)}
+                    className="w-full text-xs px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-white"
+                  >
+                    <option value="">-- 顯示原始明細資料 --</option>
+                    {columns.map((c) => (
+                      <option key={c.name} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
+              {tableGroupByCol && (
+                <span className="text-[9px] text-emerald-400 mt-0.5 block font-medium">
+                  💡 已啟用分組：將依「{tableGroupByCol}」進行加總彙總。請於下方勾選要加總的數值欄位。
+                </span>
+              )}
+
+              {!tableGroupByCol && (
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 mb-1.5">要呈現的欄位 (複選)</label>
+                  <div className="grid grid-cols-2 gap-1.5 max-h-24 overflow-y-auto custom-scrollbar bg-slate-900/60 p-2 border border-slate-700/60 rounded-xl">
+                    {columns.map((c) => {
+                      const isChecked = tableCols.includes(c.name);
+                      return (
+                        <button
+                          key={c.name}
+                          onClick={() => toggleTableColumn(c.name)}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-left transition-colors truncate ${
+                            isChecked
+                              ? 'bg-indigo-600/20 text-indigo-300 font-medium'
+                              : 'text-slate-400 hover:bg-slate-800'
+                          }`}
+                        >
+                          {isChecked ? <Check className="w-3 h-3 text-indigo-400" /> : <div className="w-3 h-3 border border-slate-600 rounded"></div>}
+                          <span className="truncate">{c.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div>
-                <label className="block text-[10px] font-semibold text-slate-400 mb-1.5">要呈現的欄位 (複選)</label>
+                <label className="block text-[10px] font-semibold text-slate-400 mb-1.5">要計算小計的數值欄位 (複選)</label>
                 <div className="grid grid-cols-2 gap-1.5 max-h-24 overflow-y-auto custom-scrollbar bg-slate-900/60 p-2 border border-slate-700/60 rounded-xl">
-                  {columns.map((c) => {
-                    const isChecked = tableCols.includes(c.name);
+                  {columns.filter(c => c.isNumeric).map((c) => {
+                    const isChecked = tableSubtotalCols.includes(c.name);
                     return (
                       <button
                         key={c.name}
-                        onClick={() => toggleTableColumn(c.name)}
+                        onClick={() => toggleTableSubtotalColumn(c.name)}
                         className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-left transition-colors truncate ${
                           isChecked
-                            ? 'bg-indigo-600/20 text-indigo-300 font-medium'
+                            ? 'bg-emerald-600/20 text-emerald-300 font-medium'
                             : 'text-slate-400 hover:bg-slate-800'
                         }`}
                       >
-                        {isChecked ? <Check className="w-3 h-3 text-indigo-400" /> : <div className="w-3 h-3 border border-slate-600 rounded"></div>}
+                        {isChecked ? <Check className="w-3 h-3 text-emerald-400" /> : <div className="w-3 h-3 border border-slate-600 rounded"></div>}
                         <span className="truncate">{c.name}</span>
                       </button>
                     );
